@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: mealbot-postgres
+    environment:
+      POSTGRES_DB: mealbot
+      POSTGRES_USER: mealbot
+      POSTGRES_PASSWORD: mealbot
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mealbot -d mealbot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - mealbot-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  mealbot-postgres-data:
