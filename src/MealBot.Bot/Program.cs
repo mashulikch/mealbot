@@ -1,5 +1,7 @@
 ﻿using MealBot.Bot.Options;
 using MealBot.Bot.Services;
+using MealBot.Application;
+using MealBot.Infrastructure;
 
 LoadDotEnv();
 
@@ -8,6 +10,8 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Services.Configure<TelegramBotOptions>(
     builder.Configuration.GetSection(TelegramBotOptions.SectionName));
 
+builder.Services.AddMealBotApplication();
+builder.Services.AddMealBotInfrastructure(builder.Configuration);
 builder.Services.AddHostedService<TelegramBotHostedService>();
 
 builder.Logging.ClearProviders();

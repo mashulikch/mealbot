@@ -2,8 +2,8 @@
 
 public sealed class TelegramBotOptions
 {
-   public const string SectionName = "TelegramBot";
+    public const string SectionName = "TelegramBot";
 
-   public string Token { get; init; } = string.Empty;
+    public string Token { get; init; } = string.Empty;
 
 }
