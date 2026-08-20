@@ -29,6 +29,7 @@ public sealed class User
 
     public ICollection<InventoryItem> InventoryItems { get; private set; } = new List<InventoryItem>();
 
+    public ICollection<MealPlan> MealPlans { get; private set; } = new List<MealPlan>();
     public void UpdateProfile(string? firstName, string? userName)
     {
         FirstName = firstName;

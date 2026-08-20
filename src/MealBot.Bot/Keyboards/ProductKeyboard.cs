@@ -19,9 +19,9 @@ public static class ProductKeyboard
         {
             new[]
             {
-                InlineKeyboardButton.WithCallbackData("г", callbackPrefix + GramUnitValue),
-                InlineKeyboardButton.WithCallbackData("мл", callbackPrefix + MilliliterUnitValue),
-                InlineKeyboardButton.WithCallbackData("шт", callbackPrefix + PieceUnitValue)
+                Button("г", callbackPrefix + GramUnitValue),
+                Button("мл", callbackPrefix + MilliliterUnitValue),
+                Button("шт", callbackPrefix + PieceUnitValue)
             }
         });
 
@@ -53,7 +53,9 @@ public static class ProductKeyboard
 
     public static bool TryParseUnit(string value, out MeasurementUnit unit)
     {
-        unit = value.Trim().ToLowerInvariant() switch
+        var normalizedValue = value.Trim().ToLowerInvariant();
+
+        unit = normalizedValue switch
         {
             GramUnitValue => MeasurementUnit.Gram,
             MilliliterUnitValue => MeasurementUnit.Milliliter,
@@ -63,4 +65,7 @@ public static class ProductKeyboard
 
         return unit != default;
     }
+
+    private static InlineKeyboardButton Button(string text, string callbackData) =>
+        InlineKeyboardButton.WithCallbackData(text, callbackData);
 }
