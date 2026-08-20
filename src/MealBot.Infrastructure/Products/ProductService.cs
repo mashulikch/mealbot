@@ -19,7 +19,9 @@ public sealed class ProductService(
         CancellationToken cancellationToken = default)
     {
         var user = await dbContext.Users
-            .SingleOrDefaultAsync(item => item.TelegramId == telegramUserId, cancellationToken);
+            .SingleOrDefaultAsync(
+                existingUser => existingUser.TelegramId == telegramUserId,
+                cancellationToken);
 
         if (user is null)
         {
@@ -40,8 +42,8 @@ public sealed class ProductService(
         await addProductValidator.ValidateAndThrowAsync(request, cancellationToken);
 
         var user = await GetAuthorizedUserAsync(request.TelegramUserId, cancellationToken);
-        var normalizedProductName = ProductName.Normalize(request.Name);
-        var product = await GetOrCreateProductAsync(normalizedProductName, cancellationToken);
+        var productName = ProductName.Normalize(request.Name);
+        var product = await FindOrCreateProductAsync(productName, cancellationToken);
 
         var inventoryItem = await dbContext.InventoryItems
             .Include(item => item.Product)
@@ -62,7 +64,7 @@ public sealed class ProductService(
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);
-        return ToDto(inventoryItem);
+        return MapToDto(inventoryItem);
     }
 
     public async Task<IReadOnlyList<InventoryItemDto>> GetInventoryAsync(
@@ -93,11 +95,10 @@ public sealed class ProductService(
         await updateInventoryItemValidator.ValidateAndThrowAsync(request, cancellationToken);
 
         var user = await GetAuthorizedUserAsync(request.TelegramUserId, cancellationToken);
-        var inventoryItem = await dbContext.InventoryItems
-            .Include(item => item.Product)
-            .SingleOrDefaultAsync(
-                item => item.Id == request.InventoryItemId && item.UserId == user.Id,
-                cancellationToken)
+        var inventoryItem = await FindInventoryItemAsync(
+            user.Id,
+            request.InventoryItemId,
+            cancellationToken)
             ?? throw new KeyNotFoundException("Продукт не найден в запасах пользователя");
 
         EnsureUnitCanBeChanged(inventoryItem, request.Unit);
@@ -121,11 +122,11 @@ public sealed class ProductService(
             duplicateItem.AddQuantity(inventoryItem.Quantity);
             dbContext.InventoryItems.Remove(inventoryItem);
             await dbContext.SaveChangesAsync(cancellationToken);
-            return ToDto(duplicateItem);
+            return MapToDto(duplicateItem);
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);
-        return ToDto(inventoryItem);
+        return MapToDto(inventoryItem);
     }
 
     public async Task DeleteAsync(
@@ -134,39 +135,50 @@ public sealed class ProductService(
         CancellationToken cancellationToken = default)
     {
         var user = await GetAuthorizedUserAsync(telegramUserId, cancellationToken);
-        var inventoryItem = await dbContext.InventoryItems
-            .SingleOrDefaultAsync(
-                item => item.Id == inventoryItemId && item.UserId == user.Id,
-                cancellationToken)
+        var inventoryItem = await FindInventoryItemAsync(
+            user.Id,
+            inventoryItemId,
+            cancellationToken)
             ?? throw new KeyNotFoundException("Продукт не найден в запасах пользователя");
 
         if (inventoryItem.ReservedQuantity > 0)
         {
-            throw new InvalidOperationException("Нельзя удалить продукт, пока он зарезервирован меню");
+            throw new InvalidOperationException(
+                "Нельзя удалить продукт, пока он зарезервирован меню");
         }
 
         dbContext.InventoryItems.Remove(inventoryItem);
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
-    private async Task<Product> GetOrCreateProductAsync(
-        (string DisplayName, string NormalizedName) normalizedProductName,
+    private async Task<Product> FindOrCreateProductAsync(
+        (string DisplayName, string NormalizedName) productName,
         CancellationToken cancellationToken)
     {
-        var product = await dbContext.Products
+        var existingProduct = await dbContext.Products
             .SingleOrDefaultAsync(
-                item => item.NormalizedName == normalizedProductName.NormalizedName,
+                product => product.NormalizedName == productName.NormalizedName,
                 cancellationToken);
 
-        if (product is not null)
+        if (existingProduct is not null)
         {
-            return product;
+            return existingProduct;
         }
 
-        product = new Product(normalizedProductName.DisplayName);
-        dbContext.Products.Add(product);
-        return product;
+        var newProduct = new Product(productName.DisplayName);
+        dbContext.Products.Add(newProduct);
+        return newProduct;
     }
+
+    private Task<InventoryItem?> FindInventoryItemAsync(
+        Guid userId,
+        Guid inventoryItemId,
+        CancellationToken cancellationToken) =>
+        dbContext.InventoryItems
+            .Include(item => item.Product)
+            .SingleOrDefaultAsync(
+                item => item.Id == inventoryItemId && item.UserId == userId,
+                cancellationToken);
 
     private static void EnsureUnitCanBeChanged(
         InventoryItem inventoryItem,
@@ -195,12 +207,14 @@ public sealed class ProductService(
         CancellationToken cancellationToken)
     {
         return await dbContext.Users
-                   .SingleOrDefaultAsync(item => item.TelegramId == telegramUserId, cancellationToken)
+                   .SingleOrDefaultAsync(
+                       user => user.TelegramId == telegramUserId,
+                       cancellationToken)
                ?? throw new InvalidOperationException(
                    "Пользователь не авторизован. Сначала отправьте /start");
     }
 
-    private static InventoryItemDto ToDto(InventoryItem inventoryItem) =>
+    private static InventoryItemDto MapToDto(InventoryItem inventoryItem) =>
         new(
             inventoryItem.Id,
             inventoryItem.Product.Name,
