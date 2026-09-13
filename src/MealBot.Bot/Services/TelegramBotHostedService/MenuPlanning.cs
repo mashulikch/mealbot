@@ -19,136 +19,203 @@ public sealed partial class TelegramBotHostedService
     {
         var telegramUserId = callbackQuery.From!.Id;
 
-        if (!_menuDialogs.TryGetValue(telegramUserId, out var state))
+        if (!_menuDialogs.TryGetValue(telegramUserId, out var dialogState))
         {
-            await SendMessageAsync(
-                telegramClient,
-                chatId,
-                MenuDialogExpiredMessage,
-                cancellationToken);
+            await SendExpiredMenuDialogAsync(telegramClient, chatId, cancellationToken);
             return;
         }
 
         if (callbackData.StartsWith(MenuKeyboard.DaysPrefix, StringComparison.Ordinal))
         {
-            if (state.Mode != MenuPlanningDialogMode.SelectDays
-                || !int.TryParse(
-                    callbackData[MenuKeyboard.DaysPrefix.Length..],
-                    NumberStyles.None,
-                    CultureInfo.InvariantCulture,
-                    out var daysCount)
-                || daysCount is < MealPlanLimits.MinDays or > MealPlanLimits.MaxDays)
-            {
-                await SendMessageAsync(telegramClient, chatId, MenuDialogExpiredMessage, cancellationToken);
-                return;
-            }
-
-            state.DaysCount = daysCount;
-            state.Mode = MenuPlanningDialogMode.SelectMeals;
-            await SendMenuDialogPromptAsync(
+            await HandleDaysSelectionAsync(
                 telegramClient,
                 chatId,
-                state,
-                null,
+                dialogState,
+                callbackData,
                 cancellationToken);
             return;
         }
 
         if (callbackData.StartsWith(MenuKeyboard.MealPrefix, StringComparison.Ordinal))
         {
-            if (state.Mode != MenuPlanningDialogMode.SelectMeals
-                || !MenuKeyboard.TryParseMealType(
-                    callbackData[MenuKeyboard.MealPrefix.Length..],
-                    out var mealType))
-            {
-                await SendMessageAsync(telegramClient, chatId, MenuDialogExpiredMessage, cancellationToken);
-                return;
-            }
-
-            if (!state.MealTypes.Add(mealType))
-            {
-                state.MealTypes.Remove(mealType);
-            }
-
-            await SendMenuDialogPromptAsync(
+            await HandleMealSelectionAsync(
                 telegramClient,
                 chatId,
-                state,
-                null,
+                dialogState,
+                callbackData,
                 cancellationToken);
             return;
         }
 
         if (callbackData.Equals(MenuKeyboard.MealsConfirmCallback, StringComparison.Ordinal))
         {
-            if (state.Mode != MenuPlanningDialogMode.SelectMeals)
-            {
-                await SendMessageAsync(telegramClient, chatId, MenuDialogExpiredMessage, cancellationToken);
-                return;
-            }
-
-            if (state.MealTypes.Count == 0)
-            {
-                await SendMenuDialogPromptAsync(
-                    telegramClient,
-                    chatId,
-                    state,
-                    "Выберите хотя бы один приём пищи",
-                    cancellationToken);
-                return;
-            }
-
-            state.Mode = MenuPlanningDialogMode.SelectServings;
-            await SendMenuDialogPromptAsync(
+            await ConfirmMealSelectionAsync(
                 telegramClient,
                 chatId,
-                state,
-                null,
+                dialogState,
                 cancellationToken);
             return;
         }
 
         if (callbackData.StartsWith(MenuKeyboard.ServingsPrefix, StringComparison.Ordinal))
         {
-            if (state.Mode != MenuPlanningDialogMode.SelectServings
-                || !int.TryParse(
-                    callbackData[MenuKeyboard.ServingsPrefix.Length..],
-                    NumberStyles.None,
-                    CultureInfo.InvariantCulture,
-                    out var servings)
-                || servings is < MealPlanLimits.MinServings or > MealPlanLimits.MaxServings)
-            {
-                await SendMessageAsync(telegramClient, chatId, MenuDialogExpiredMessage, cancellationToken);
-                return;
-            }
-
-            state.Servings = servings;
-            await CompleteMealPlanCreationAsync(
+            await HandleServingsSelectionAsync(
                 telegramClient,
                 callbackQuery,
                 chatId,
-                state,
+                dialogState,
+                callbackData,
                 cancellationToken);
             return;
         }
+
+        logger.LogWarning("Unknown menu callback data: {CallbackData}", callbackData);
+        await SendExpiredMenuDialogAsync(telegramClient, chatId, cancellationToken);
+    }
+
+    private async Task HandleDaysSelectionAsync(
+        ITelegramBotClient telegramClient,
+        long chatId,
+        MenuPlanningDialogState dialogState,
+        string callbackData,
+        CancellationToken cancellationToken)
+    {
+        if (dialogState.Mode != MenuPlanningDialogMode.SelectDays
+            || !TryParseSelection(
+                callbackData,
+                MenuKeyboard.DaysPrefix,
+                MealPlanLimits.MinDays,
+                MealPlanLimits.MaxDays,
+                out var daysCount))
+        {
+            await SendExpiredMenuDialogAsync(telegramClient, chatId, cancellationToken);
+            return;
+        }
+
+        dialogState.DaysCount = daysCount;
+        dialogState.Mode = MenuPlanningDialogMode.SelectMeals;
+
+        await SendMenuDialogPromptAsync(
+            telegramClient,
+            chatId,
+            dialogState,
+            prefix: null,
+            cancellationToken);
+    }
+
+    private async Task HandleMealSelectionAsync(
+        ITelegramBotClient telegramClient,
+        long chatId,
+        MenuPlanningDialogState dialogState,
+        string callbackData,
+        CancellationToken cancellationToken)
+    {
+        var mealTypeValue = callbackData[MenuKeyboard.MealPrefix.Length..];
+        if (dialogState.Mode != MenuPlanningDialogMode.SelectMeals
+            || !MenuKeyboard.TryParseMealType(mealTypeValue, out var mealType))
+        {
+            await SendExpiredMenuDialogAsync(telegramClient, chatId, cancellationToken);
+            return;
+        }
+
+        if (!dialogState.SelectedMealTypes.Add(mealType))
+        {
+            dialogState.SelectedMealTypes.Remove(mealType);
+        }
+
+        await SendMenuDialogPromptAsync(
+            telegramClient,
+            chatId,
+            dialogState,
+            prefix: null,
+            cancellationToken);
+    }
+
+    private async Task ConfirmMealSelectionAsync(
+        ITelegramBotClient telegramClient,
+        long chatId,
+        MenuPlanningDialogState dialogState,
+        CancellationToken cancellationToken)
+    {
+        if (dialogState.Mode != MenuPlanningDialogMode.SelectMeals)
+        {
+            await SendExpiredMenuDialogAsync(telegramClient, chatId, cancellationToken);
+            return;
+        }
+
+        if (dialogState.SelectedMealTypes.Count == 0)
+        {
+            await SendMenuDialogPromptAsync(
+                telegramClient,
+                chatId,
+                dialogState,
+                "Выберите хотя бы один приём пищи",
+                cancellationToken);
+            return;
+        }
+
+        dialogState.Mode = MenuPlanningDialogMode.SelectServings;
+        await SendMenuDialogPromptAsync(
+            telegramClient,
+            chatId,
+            dialogState,
+            prefix: null,
+            cancellationToken);
+    }
+
+    private async Task HandleServingsSelectionAsync(
+        ITelegramBotClient telegramClient,
+        CallbackQuery callbackQuery,
+        long chatId,
+        MenuPlanningDialogState dialogState,
+        string callbackData,
+        CancellationToken cancellationToken)
+    {
+        if (dialogState.Mode != MenuPlanningDialogMode.SelectServings
+            || !TryParseSelection(
+                callbackData,
+                MenuKeyboard.ServingsPrefix,
+                MealPlanLimits.MinServings,
+                MealPlanLimits.MaxServings,
+                out var servings))
+        {
+            await SendExpiredMenuDialogAsync(telegramClient, chatId, cancellationToken);
+            return;
+        }
+
+        dialogState.Servings = servings;
+        await CompleteMealPlanCreationAsync(
+            telegramClient,
+            callbackQuery,
+            chatId,
+            dialogState,
+            cancellationToken);
     }
 
     private async Task CompleteMealPlanCreationAsync(
         ITelegramBotClient telegramClient,
         CallbackQuery callbackQuery,
         long chatId,
-        MenuPlanningDialogState state,
+        MenuPlanningDialogState dialogState,
         CancellationToken cancellationToken)
     {
+        if (dialogState.DaysCount is not { } daysCount
+            || dialogState.Servings is not { } servings
+            || dialogState.SelectedMealTypes.Count == 0)
+        {
+            await SendExpiredMenuDialogAsync(telegramClient, chatId, cancellationToken);
+            return;
+        }
+
         var telegramUser = callbackQuery.From!;
-        var mealPlan = await ExecuteWithMealPlanServiceAsync(
+        var mealPlan = await ExecuteMealPlanServiceAsync(
             service => service.CreateAsync(
                 new CreateMealPlanRequest(
-                    telegramUser.Id,
-                    DateOnly.FromDateTime(DateTime.UtcNow),
-                    state.DaysCount!.Value,
-                    state.MealTypes.ToArray(),
-                    state.Servings!.Value),
+                    TelegramUserId: telegramUser.Id,
+                    StartDate: DateOnly.FromDateTime(DateTime.UtcNow),
+                    DaysCount: daysCount,
+                    MealTypes: dialogState.SelectedMealTypes.ToArray(),
+                    Servings: servings),
                 cancellationToken));
 
         _menuDialogs.TryRemove(telegramUser.Id, out _);
@@ -160,22 +227,48 @@ public sealed partial class TelegramBotHostedService
             cancellationToken);
     }
 
+    private static Task SendExpiredMenuDialogAsync(
+        ITelegramBotClient telegramClient,
+        long chatId,
+        CancellationToken cancellationToken) =>
+        SendMessageAsync(
+            telegramClient,
+            chatId,
+            MenuDialogExpiredMessage,
+            cancellationToken);
+
+    private static bool TryParseSelection(
+        string callbackData,
+        string callbackPrefix,
+        int minimumValue,
+        int maximumValue,
+        out int value)
+    {
+        return int.TryParse(
+                   callbackData[callbackPrefix.Length..],
+                   NumberStyles.None,
+                   CultureInfo.InvariantCulture,
+                   out value)
+               && value >= minimumValue
+               && value <= maximumValue;
+    }
+
     private static Task SendMenuDialogPromptAsync(
         ITelegramBotClient telegramClient,
         long chatId,
-        MenuPlanningDialogState state,
+        MenuPlanningDialogState dialogState,
         string? prefix,
         CancellationToken cancellationToken)
     {
-        var (prompt, keyboard) = state.Mode switch
+        var (prompt, keyboard) = dialogState.Mode switch
         {
             MenuPlanningDialogMode.SelectDays =>
                 (SelectDaysPrompt, (ReplyMarkup?)MenuKeyboard.CreateDaysSelection()),
             MenuPlanningDialogMode.SelectMeals =>
-                (SelectMealsPrompt, (ReplyMarkup?)MenuKeyboard.CreateMealSelection(state.MealTypes)),
+                (SelectMealsPrompt, (ReplyMarkup?)MenuKeyboard.CreateMealSelection(dialogState.SelectedMealTypes)),
             MenuPlanningDialogMode.SelectServings =>
                 (SelectServingsPrompt, (ReplyMarkup?)MenuKeyboard.CreateServingsSelection()),
-            _ => throw new ArgumentOutOfRangeException()
+            _ => throw new ArgumentOutOfRangeException(nameof(dialogState.Mode), dialogState.Mode, null)
         };
 
         var response = string.IsNullOrWhiteSpace(prefix)
@@ -188,13 +281,15 @@ public sealed partial class TelegramBotHostedService
     private static string BuildMealPlanCreatedMessage(MealPlanDto mealPlan)
     {
         var endDate = mealPlan.StartDate.AddDays(mealPlan.DaysCount - 1);
-        var meals = string.Join(", ", mealPlan.MealTypes.Select(FormatMealType));
+        var mealNames = string.Join(", ", mealPlan.MealTypes.Select(FormatMealType));
 
         return $"Настройки меню сохранены!\n\n" +
-               $"Период: {mealPlan.StartDate:dd.MM.yyyy} — {endDate:dd.MM.yyyy} ({mealPlan.DaysCount} дн.)\n" +
-               $"Приёмы пищи: {meals}\n" +
+               $"Период: {mealPlan.StartDate:dd.MM.yyyy} — {endDate:dd.MM.yyyy} " +
+               $"({mealPlan.DaysCount} дн.)\n" +
+               $"Приёмы пищи: {mealNames}\n" +
                $"Порций на блюдо: {mealPlan.Servings}\n" +
-               "Блюда будут составлены из добавленных продуктов; соль, перец и базовые приправы не учитываются.\n\n" +
+               "Блюда будут составлены из добавленных продуктов; соль, перец и базовые " +
+               "приправы не учитываются.\n\n" +
                $"Запланировано блюд: {mealPlan.PlannedMeals.Count}";
     }
 
@@ -205,9 +300,4 @@ public sealed partial class TelegramBotHostedService
         MealType.Dinner => "ужин",
         _ => mealType.ToString()
     };
-
 }
-
-
-
-

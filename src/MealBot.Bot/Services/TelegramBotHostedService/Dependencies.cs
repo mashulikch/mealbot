@@ -10,7 +10,7 @@ public sealed partial class TelegramBotHostedService
         User telegramUser,
         CancellationToken cancellationToken)
     {
-        await ExecuteWithProductServiceAsync(
+        await ExecuteProductServiceAsync(
             service => service.EnsureUserAsync(
                 telegramUser.Id,
                 telegramUser.FirstName,
@@ -34,29 +34,33 @@ public sealed partial class TelegramBotHostedService
         return false;
     }
 
-    private async Task<TResult> ExecuteWithProductServiceAsync<TResult>(
+    private async Task<TResult> ExecuteProductServiceAsync<TResult>(
         Func<IProductService, Task<TResult>> operation)
     {
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var productService = scope.ServiceProvider.GetRequiredService<IProductService>();
-
-        return await operation(productService);
+        return await ExecuteScopedOperationAsync(operation);
     }
 
-    private Task ExecuteWithProductServiceAsync(Func<IProductService, Task> operation) =>
-        ExecuteWithProductServiceAsync(async productService =>
+    private async Task ExecuteProductServiceAsync(Func<IProductService, Task> operation)
+    {
+        await ExecuteScopedOperationAsync<IProductService, bool>(async productService =>
         {
             await operation(productService);
             return true;
         });
+    }
 
-    private async Task<TResult> ExecuteWithMealPlanServiceAsync<TResult>(
+    private Task<TResult> ExecuteMealPlanServiceAsync<TResult>(
         Func<IMealPlanService, Task<TResult>> operation)
+        => ExecuteScopedOperationAsync(operation);
+
+    private async Task<TResult> ExecuteScopedOperationAsync<TService, TResult>(
+        Func<TService, Task<TResult>> operation)
+        where TService : notnull
     {
         await using var scope = scopeFactory.CreateAsyncScope();
-        var mealPlanService = scope.ServiceProvider.GetRequiredService<IMealPlanService>();
+        var service = scope.ServiceProvider.GetRequiredService<TService>();
 
-        return await operation(mealPlanService);
+        return await operation(service);
     }
 
     private void StartAddProductDialog(long telegramUserId)
@@ -76,7 +80,6 @@ public sealed partial class TelegramBotHostedService
         _menuDialogs.TryRemove(telegramUserId, out _);
     }
 }
-
 
 
 

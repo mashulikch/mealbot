@@ -59,7 +59,7 @@ public sealed partial class TelegramBotHostedService
         string productName,
         CancellationToken cancellationToken)
     {
-        if (productName.Length is < 2 or > ProductName.MaxLength)
+        if (!ProductName.IsValid(productName))
         {
             await SendMessageAsync(
                 telegramClient,
@@ -96,7 +96,8 @@ public sealed partial class TelegramBotHostedService
             return;
         }
 
-        if (!TryGetUnitSelectionPrefix(dialogState, out var callbackPrefix))
+        var callbackPrefix = GetUnitSelectionPrefix(dialogState);
+        if (callbackPrefix is null)
         {
             await SendMessageAsync(
                 telegramClient,
@@ -116,19 +117,15 @@ public sealed partial class TelegramBotHostedService
             ProductKeyboard.CreateUnitSelection(callbackPrefix));
     }
 
-    private static bool TryGetUnitSelectionPrefix(
-        ProductDialogState dialogState,
-        out string callbackPrefix)
+    private static string? GetUnitSelectionPrefix(ProductDialogState dialogState)
     {
-        callbackPrefix = dialogState.Mode switch
+        return dialogState.Mode switch
         {
             ProductDialogMode.AddQuantity => ProductKeyboard.AddUnitPrefix,
             ProductDialogMode.EditQuantity when dialogState.InventoryItemId is { } itemId =>
                 $"{ProductKeyboard.EditUnitPrefix}{itemId}:",
-            _ => string.Empty
+            _ => null
         };
-
-        return callbackPrefix.Length > 0;
     }
 
 
@@ -142,10 +139,7 @@ public sealed partial class TelegramBotHostedService
         var telegramUser = callbackQuery.From!;
 
         if (!ProductKeyboard.TryParseUnit(unitValue, out var unit)
-            || !TryGetDialogState(
-                telegramUser.Id,
-                ProductDialogMode.AddQuantity,
-                out var dialogState)
+            || !TryGetDialogState(telegramUser.Id, ProductDialogMode.AddQuantity, out var dialogState)
             || string.IsNullOrWhiteSpace(dialogState.ProductName)
             || dialogState.Quantity is null)
         {
@@ -157,25 +151,21 @@ public sealed partial class TelegramBotHostedService
             return;
         }
 
-        var result = await ExecuteWithProductServiceAsync(
-            service => service.AddAsync(
-                new AddProductRequest(
-                    telegramUser.Id,
-                    dialogState.ProductName!,
-                    dialogState.Quantity.Value,
-                    unit,
-                    telegramUser.FirstName,
-                    telegramUser.Username),
-                cancellationToken));
-
-        _productDialogs.TryRemove(telegramUser.Id, out _);
-
-        await SendInventoryAsync(
+        await CompleteProductChangeAsync(
             telegramClient,
             chatId,
             telegramUser.Id,
             cancellationToken,
-            $"Добавлено: {result.ProductName} — {FormatQuantity(result.Quantity)} {ProductKeyboard.FormatUnit(result.Unit)}");
+            service => service.AddAsync(
+                new AddProductRequest(
+                    telegramUser.Id,
+                    dialogState.ProductName,
+                    dialogState.Quantity.Value,
+                    unit,
+                    telegramUser.FirstName,
+                    telegramUser.Username),
+                cancellationToken),
+            "Добавлено");
     }
 
     private async Task CompleteEditProductAsync(
@@ -203,23 +193,40 @@ public sealed partial class TelegramBotHostedService
             return;
         }
 
-        var result = await ExecuteWithProductServiceAsync(
+        await CompleteProductChangeAsync(
+            telegramClient,
+            chatId,
+            telegramUser.Id,
+            cancellationToken,
             service => service.UpdateAsync(
                 new UpdateInventoryItemRequest(
                     telegramUser.Id,
                     itemId,
                     dialogState.Quantity.Value,
                     unit),
-                cancellationToken));
+                cancellationToken),
+            "Изменено");
+    }
 
-        _productDialogs.TryRemove(telegramUser.Id, out _);
+    private async Task CompleteProductChangeAsync(
+        ITelegramBotClient telegramClient,
+        long chatId,
+        long telegramUserId,
+        CancellationToken cancellationToken,
+        Func<IProductService, Task<InventoryItemDto>> saveProduct,
+        string action)
+    {
+        var changedProduct = await ExecuteProductServiceAsync(saveProduct);
+        _productDialogs.TryRemove(telegramUserId, out _);
 
         await SendInventoryAsync(
             telegramClient,
             chatId,
-            telegramUser.Id,
+            telegramUserId,
             cancellationToken,
-            $"Изменено: {result.ProductName} — {FormatQuantity(result.Quantity)} {ProductKeyboard.FormatUnit(result.Unit)}");
+            $"{action}: {changedProduct.ProductName} — " +
+            $"{FormatQuantity(changedProduct.Quantity)} " +
+            ProductKeyboard.FormatUnit(changedProduct.Unit));
     }
 
     private static bool TryParseEditUnitCallback(
@@ -288,7 +295,4 @@ public sealed partial class TelegramBotHostedService
     private static string FormatQuantity(decimal quantity) =>
         quantity.ToString("0.###", CultureInfo.InvariantCulture);
 }
-
-
-
 

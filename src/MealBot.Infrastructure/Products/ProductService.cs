@@ -18,21 +18,23 @@ public sealed class ProductService(
         string? userName,
         CancellationToken cancellationToken = default)
     {
-        var user = await dbContext.Users
+        var existingUser = await dbContext.Users
             .SingleOrDefaultAsync(
-                existingUser => existingUser.TelegramId == telegramUserId,
+                user => user.TelegramId == telegramUserId,
                 cancellationToken);
 
-        if (user is null)
+        if (existingUser is null)
         {
             dbContext.Users.Add(new User(telegramUserId, firstName, userName));
         }
         else
         {
-            user.UpdateProfile(firstName, userName);
+            existingUser.UpdateProfile(firstName, userName);
         }
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await SaveChangesAsync(
+            cancellationToken,
+            "Не удалось сохранить данные пользователя. Попробуйте ещё раз");
     }
 
     public async Task<InventoryItemDto> AddAsync(
@@ -42,8 +44,7 @@ public sealed class ProductService(
         await addProductValidator.ValidateAndThrowAsync(request, cancellationToken);
 
         var user = await GetAuthorizedUserAsync(request.TelegramUserId, cancellationToken);
-        var productName = ProductName.Normalize(request.Name);
-        var product = await FindOrCreateProductAsync(productName, cancellationToken);
+        var product = await FindOrCreateProductAsync(request.Name, cancellationToken);
 
         var inventoryItem = await dbContext.InventoryItems
             .Include(item => item.Product)
@@ -63,7 +64,9 @@ public sealed class ProductService(
             inventoryItem.AddQuantity(request.Quantity);
         }
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await SaveChangesAsync(
+            cancellationToken,
+            "Не удалось сохранить изменения в запасах. Попробуйте ещё раз");
         return MapToDto(inventoryItem);
     }
 
@@ -95,7 +98,7 @@ public sealed class ProductService(
         await updateInventoryItemValidator.ValidateAndThrowAsync(request, cancellationToken);
 
         var user = await GetAuthorizedUserAsync(request.TelegramUserId, cancellationToken);
-        var inventoryItem = await FindInventoryItemAsync(
+        var inventoryItem = await FindInventoryItemForUserAsync(
             user.Id,
             request.InventoryItemId,
             cancellationToken)
@@ -106,14 +109,11 @@ public sealed class ProductService(
         inventoryItem.SetQuantity(request.Quantity);
         inventoryItem.SetUnit(request.Unit);
 
-        var duplicateItem = await dbContext.InventoryItems
-            .Include(item => item.Product)
-            .SingleOrDefaultAsync(
-                item => item.Id != inventoryItem.Id
-                        && item.UserId == user.Id
-                        && item.ProductId == inventoryItem.ProductId
-                        && item.Unit == request.Unit,
-                cancellationToken);
+        var duplicateItem = await FindDuplicateInventoryItemAsync(
+            user.Id,
+            inventoryItem,
+            request.Unit,
+            cancellationToken);
 
         if (duplicateItem is not null)
         {
@@ -121,11 +121,15 @@ public sealed class ProductService(
 
             duplicateItem.AddQuantity(inventoryItem.Quantity);
             dbContext.InventoryItems.Remove(inventoryItem);
-            await dbContext.SaveChangesAsync(cancellationToken);
+            await SaveChangesAsync(
+                cancellationToken,
+                "Не удалось сохранить изменения в запасах. Попробуйте ещё раз");
             return MapToDto(duplicateItem);
         }
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await SaveChangesAsync(
+            cancellationToken,
+            "Не удалось сохранить изменения в запасах. Попробуйте ещё раз");
         return MapToDto(inventoryItem);
     }
 
@@ -135,7 +139,7 @@ public sealed class ProductService(
         CancellationToken cancellationToken = default)
     {
         var user = await GetAuthorizedUserAsync(telegramUserId, cancellationToken);
-        var inventoryItem = await FindInventoryItemAsync(
+        var inventoryItem = await FindInventoryItemForUserAsync(
             user.Id,
             inventoryItemId,
             cancellationToken)
@@ -148,16 +152,19 @@ public sealed class ProductService(
         }
 
         dbContext.InventoryItems.Remove(inventoryItem);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await SaveChangesAsync(
+            cancellationToken,
+            "Не удалось сохранить изменения в запасах. Попробуйте ещё раз");
     }
 
     private async Task<Product> FindOrCreateProductAsync(
-        (string DisplayName, string NormalizedName) productName,
+        string productName,
         CancellationToken cancellationToken)
     {
+        var normalizedProductName = ProductName.Normalize(productName);
         var existingProduct = await dbContext.Products
             .SingleOrDefaultAsync(
-                product => product.NormalizedName == productName.NormalizedName,
+                product => product.NormalizedName == normalizedProductName.NormalizedName,
                 cancellationToken);
 
         if (existingProduct is not null)
@@ -165,12 +172,12 @@ public sealed class ProductService(
             return existingProduct;
         }
 
-        var newProduct = new Product(productName.DisplayName);
+        var newProduct = new Product(normalizedProductName.DisplayName);
         dbContext.Products.Add(newProduct);
         return newProduct;
     }
 
-    private Task<InventoryItem?> FindInventoryItemAsync(
+    private Task<InventoryItem?> FindInventoryItemForUserAsync(
         Guid userId,
         Guid inventoryItemId,
         CancellationToken cancellationToken) =>
@@ -178,6 +185,20 @@ public sealed class ProductService(
             .Include(item => item.Product)
             .SingleOrDefaultAsync(
                 item => item.Id == inventoryItemId && item.UserId == userId,
+                cancellationToken);
+
+    private Task<InventoryItem?> FindDuplicateInventoryItemAsync(
+        Guid userId,
+        InventoryItem inventoryItem,
+        MeasurementUnit requestedUnit,
+        CancellationToken cancellationToken) =>
+        dbContext.InventoryItems
+            .Include(item => item.Product)
+            .SingleOrDefaultAsync(
+                item => item.Id != inventoryItem.Id
+                        && item.UserId == userId
+                        && item.ProductId == inventoryItem.ProductId
+                        && item.Unit == requestedUnit,
                 cancellationToken);
 
     private static void EnsureUnitCanBeChanged(
@@ -206,12 +227,27 @@ public sealed class ProductService(
         long telegramUserId,
         CancellationToken cancellationToken)
     {
-        return await dbContext.Users
-                   .SingleOrDefaultAsync(
-                       user => user.TelegramId == telegramUserId,
-                       cancellationToken)
-               ?? throw new InvalidOperationException(
-                   "Пользователь не авторизован. Сначала отправьте /start");
+        var user = await dbContext.Users
+            .SingleOrDefaultAsync(
+                candidate => candidate.TelegramId == telegramUserId,
+                cancellationToken);
+
+        return user ?? throw new InvalidOperationException(
+            "Пользователь не авторизован. Сначала отправьте /start");
+    }
+
+    private async Task SaveChangesAsync(
+        CancellationToken cancellationToken,
+        string failureMessage)
+    {
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception)
+        {
+            throw new InvalidOperationException(failureMessage, exception);
+        }
     }
 
     private static InventoryItemDto MapToDto(InventoryItem inventoryItem) =>

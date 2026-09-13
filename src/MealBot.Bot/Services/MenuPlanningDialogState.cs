@@ -15,7 +15,7 @@ public sealed class MenuPlanningDialogState
 
     public int? DaysCount { get; set; }
 
-    public HashSet<MealType> MealTypes { get; } = new();
+    public HashSet<MealType> SelectedMealTypes { get; } = new();
 
     public int? Servings { get; set; }
 }

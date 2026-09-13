@@ -34,7 +34,8 @@ public sealed partial class TelegramBotHostedService(
         "Выберите действие на клавиатуре или отправьте /start";
 
     private static readonly string InvalidProductNameMessage =
-        $"Название должно содержать от 2 до {ProductName.MaxLength} символов. Попробуйте ещё раз";
+        $"Название должно содержать от {ProductName.MinLength} до " +
+        $"{ProductName.MaxLength} символов. Попробуйте ещё раз";
 
     private const string ProductNamePrompt =
         "Введите название продукта, например: Курица\n\nДля отмены отправьте /cancel";
@@ -56,5 +57,4 @@ public sealed partial class TelegramBotHostedService(
     private readonly ConcurrentDictionary<long, ProductDialogState> _productDialogs = new();
     private readonly ConcurrentDictionary<long, MenuPlanningDialogState> _menuDialogs = new();
 }
-
 

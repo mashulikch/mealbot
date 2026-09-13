@@ -26,7 +26,7 @@ public sealed partial class TelegramBotHostedService
 
         var telegramUserId = callbackQuery.From!.Id;
 
-        await ExecuteWithProductServiceAsync(
+        await ExecuteProductServiceAsync(
             service => service.DeleteAsync(
                 telegramUserId,
                 inventoryItemId,
@@ -49,7 +49,7 @@ public sealed partial class TelegramBotHostedService
         CancellationToken cancellationToken,
         string? prefix = null)
     {
-        var inventory = await ExecuteWithProductServiceAsync(
+        var inventory = await ExecuteProductServiceAsync(
             service => service.GetInventoryAsync(telegramUserId, cancellationToken));
 
         var inventoryMessage = BuildInventoryMessage(inventory, prefix);
@@ -92,7 +92,6 @@ public sealed partial class TelegramBotHostedService
     }
 
 }
-
 
 
 
