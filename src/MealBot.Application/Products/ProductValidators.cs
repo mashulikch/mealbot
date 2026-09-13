@@ -11,8 +11,10 @@ public sealed class AddProductRequestValidator : AbstractValidator<AddProductReq
 
         RuleFor(request => request.Name)
             .NotEmpty()
-            .Must(name => name.Trim().Length is >= 2 and <= ProductName.MaxLength)
-            .WithMessage($"Название продукта должно содержать от 2 до {ProductName.MaxLength} символов");
+            .Must(ProductName.IsValid)
+            .WithMessage(
+                $"Название продукта должно содержать от {ProductName.MinLength} " +
+                $"до {ProductName.MaxLength} символов");
 
         RuleFor(request => request.Quantity).MustBeValidProductQuantity();
         RuleFor(request => request.Unit).IsInEnum();

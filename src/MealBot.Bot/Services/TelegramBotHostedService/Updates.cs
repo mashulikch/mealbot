@@ -200,10 +200,7 @@ public sealed partial class TelegramBotHostedService
         long chatId,
         CancellationToken cancellationToken)
     {
-        if (callbackData.StartsWith(MenuKeyboard.DaysPrefix, StringComparison.Ordinal)
-            || callbackData.StartsWith(MenuKeyboard.MealPrefix, StringComparison.Ordinal)
-            || callbackData.Equals(MenuKeyboard.MealsConfirmCallback, StringComparison.Ordinal)
-            || callbackData.StartsWith(MenuKeyboard.ServingsPrefix, StringComparison.Ordinal))
+        if (IsMenuPlanningCallback(callbackData))
         {
             await HandleMenuPlanningCallbackAsync(
                 telegramClient,
@@ -261,6 +258,12 @@ public sealed partial class TelegramBotHostedService
         logger.LogWarning("Unknown Telegram callback data: {CallbackData}", callbackData);
     }
 
+    private static bool IsMenuPlanningCallback(string callbackData) =>
+        callbackData.StartsWith(MenuKeyboard.DaysPrefix, StringComparison.Ordinal)
+        || callbackData.StartsWith(MenuKeyboard.MealPrefix, StringComparison.Ordinal)
+        || callbackData.Equals(MenuKeyboard.MealsConfirmCallback, StringComparison.Ordinal)
+        || callbackData.StartsWith(MenuKeyboard.ServingsPrefix, StringComparison.Ordinal);
+
 
     private static bool TryGetTextMessage(Update update, out Message message)
     {
@@ -276,7 +279,6 @@ public sealed partial class TelegramBotHostedService
     }
 
 }
-
 
 
 

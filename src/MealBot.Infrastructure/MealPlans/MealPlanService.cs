@@ -16,29 +16,32 @@ public sealed class MealPlanService(
     {
         await requestValidator.ValidateAndThrowAsync(request, cancellationToken);
 
-        var user = await FindUserAsync(request.TelegramUserId, cancellationToken)
-            ?? throw new InvalidOperationException(
-                "Пользователь не авторизован. Сначала отправьте /start");
+        var user = await GetAuthorizedUserAsync(request.TelegramUserId, cancellationToken);
 
         var mealPlan = new MealPlan(
-            user,
-            request.StartDate,
-            request.DaysCount,
-            request.MealTypes,
-            request.Servings);
+            user: user,
+            startDate: request.StartDate,
+            daysCount: request.DaysCount,
+            mealTypes: request.MealTypes,
+            servings: request.Servings);
 
         dbContext.MealPlans.Add(mealPlan);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await SaveChangesAsync(cancellationToken);
 
         return MapToDto(mealPlan);
     }
 
-    private Task<User?> FindUserAsync(
+    private async Task<User> GetAuthorizedUserAsync(
         long telegramUserId,
-        CancellationToken cancellationToken) =>
-        dbContext.Users.SingleOrDefaultAsync(
-            user => user.TelegramId == telegramUserId,
+        CancellationToken cancellationToken)
+    {
+        var user = await dbContext.Users.SingleOrDefaultAsync(
+            candidate => candidate.TelegramId == telegramUserId,
             cancellationToken);
+
+        return user ?? throw new InvalidOperationException(
+            "Пользователь не авторизован. Сначала отправьте /start");
+    }
 
     private static MealPlanDto MapToDto(MealPlan mealPlan)
     {
@@ -59,17 +62,33 @@ public sealed class MealPlanService(
                 "Не удалось создать меню: в нём нет запланированных блюд");
         }
 
+        var mealTypes = plannedMeals
+            .Select(plannedMeal => plannedMeal.MealType)
+            .Distinct()
+            .OrderBy(mealType => mealType)
+            .ToList();
+
         return new MealPlanDto(
             mealPlan.Id,
             mealPlan.StartDate,
             mealPlan.DaysCount,
-            plannedMeals
-                .Select(plannedMeal => plannedMeal.MealType)
-                .Distinct()
-                .OrderBy(mealType => mealType)
-                .ToList(),
+            mealTypes,
             plannedMeals[0].Servings,
             mealPlan.Status,
             plannedMeals);
+    }
+
+    private async Task SaveChangesAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception)
+        {
+            throw new InvalidOperationException(
+                "Не удалось сохранить настройки меню. Попробуйте ещё раз",
+                exception);
+        }
     }
 }

@@ -12,10 +12,7 @@ public sealed class InventoryItem
         ArgumentNullException.ThrowIfNull(product);
         EnsurePositiveQuantity(quantity);
 
-        if (!Enum.IsDefined(unit))
-        {
-            throw new ArgumentException("Неизвестная единица измерения", nameof(unit));
-        }
+        EnsureValidUnit(unit);
 
         User = user;
         UserId = user.Id;
@@ -64,10 +61,7 @@ public sealed class InventoryItem
 
     public void SetUnit(MeasurementUnit unit)
     {
-        if (!Enum.IsDefined(unit))
-        {
-            throw new ArgumentException("Неизвестная единица измерения", nameof(unit));
-        }
+        EnsureValidUnit(unit);
 
         Unit = unit;
         Touch();
@@ -96,7 +90,8 @@ public sealed class InventoryItem
     {
         if (quantity <= 0 || quantity > ReservedQuantity)
         {
-            throw new InvalidOperationException("Нельзя освободить больше зарезервированного кол-ва");
+            throw new InvalidOperationException(
+                "Нельзя освободить больше зарезервированного количества");
         }
 
         ReservedQuantity -= quantity;
@@ -122,6 +117,14 @@ public sealed class InventoryItem
             throw new ArgumentOutOfRangeException(
                 nameof(quantity),
                 "Количество должно быть больше нуля");
+        }
+    }
+
+    private static void EnsureValidUnit(MeasurementUnit unit)
+    {
+        if (!Enum.IsDefined(unit))
+        {
+            throw new ArgumentException("Неизвестная единица измерения", nameof(unit));
         }
     }
 
