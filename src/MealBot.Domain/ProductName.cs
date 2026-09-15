@@ -7,8 +7,7 @@ public static class ProductName
 
     public static bool IsValid(string? name)
     {
-        var normalizedName = CollapseWhitespace(name);
-        return normalizedName.Length is >= MinLength and <= MaxLength;
+        return TryNormalize(name, out _);
     }
 
     public static (string DisplayName, string NormalizedName) Normalize(string name)
@@ -23,6 +22,19 @@ public static class ProductName
         }
 
         return (displayName, displayName.ToUpperInvariant());
+    }
+
+    public static bool TryNormalize(string? name, out string normalizedName)
+    {
+        var displayName = CollapseWhitespace(name);
+        if (displayName.Length is < MinLength or > MaxLength)
+        {
+            normalizedName = string.Empty;
+            return false;
+        }
+
+        normalizedName = displayName.ToUpperInvariant();
+        return true;
     }
 
     private static string CollapseWhitespace(string? name) =>

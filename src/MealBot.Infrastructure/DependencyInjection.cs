@@ -25,6 +25,7 @@ public static class DependencyInjection
 
         services.AddDbContext<MealBotDbContext>(options => options.UseNpgsql(connectionString));
         services.AddScoped<IProductService, ProductService>();
+        services.AddScoped<IProductCatalog, ProductCatalogService>();
         services.AddScoped<IMealPlanService, MealPlanService>();
         services.AddOptions<RecipeGeneratorOptions>()
             .Bind(configuration.GetSection(RecipeGeneratorOptions.SectionName));

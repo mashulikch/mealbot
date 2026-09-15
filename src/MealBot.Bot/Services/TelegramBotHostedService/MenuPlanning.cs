@@ -244,11 +244,17 @@ public sealed partial class TelegramBotHostedService
         int maximumValue,
         out int value)
     {
+        if (!callbackData.StartsWith(callbackPrefix, StringComparison.Ordinal))
+        {
+            value = default;
+            return false;
+        }
+
         return int.TryParse(
-                   callbackData[callbackPrefix.Length..],
-                   NumberStyles.None,
-                   CultureInfo.InvariantCulture,
-                   out value)
+            callbackData[callbackPrefix.Length..],
+            NumberStyles.None,
+            CultureInfo.InvariantCulture,
+            out value)
                && value >= minimumValue
                && value <= maximumValue;
     }
