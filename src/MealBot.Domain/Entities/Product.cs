@@ -21,6 +21,8 @@ public sealed class Product
 
     public ICollection<InventoryItem> InventoryItems { get; private set; } = new List<InventoryItem>();
 
+    public ICollection<ProductAlias> Aliases { get; private set; } = new List<ProductAlias>();
+
     public void Rename(string name)
     {
         var normalizedName = ProductName.Normalize(name);

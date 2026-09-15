@@ -12,6 +12,9 @@ public sealed class ProductService(
     IValidator<AddProductRequest> addProductValidator,
     IValidator<UpdateInventoryItemRequest> updateInventoryItemValidator) : IProductService
 {
+    private const string InventorySaveErrorMessage =
+        "Не удалось сохранить изменения в запасах. Попробуйте ещё раз";
+
     public async Task EnsureUserAsync(
         long telegramUserId,
         string? firstName,
@@ -64,9 +67,7 @@ public sealed class ProductService(
             inventoryItem.AddQuantity(request.Quantity);
         }
 
-        await SaveChangesAsync(
-            cancellationToken,
-            "Не удалось сохранить изменения в запасах. Попробуйте ещё раз");
+        await SaveChangesAsync(cancellationToken);
         return MapToDto(inventoryItem);
     }
 
@@ -121,15 +122,11 @@ public sealed class ProductService(
 
             duplicateItem.AddQuantity(inventoryItem.Quantity);
             dbContext.InventoryItems.Remove(inventoryItem);
-            await SaveChangesAsync(
-                cancellationToken,
-                "Не удалось сохранить изменения в запасах. Попробуйте ещё раз");
+            await SaveChangesAsync(cancellationToken);
             return MapToDto(duplicateItem);
         }
 
-        await SaveChangesAsync(
-            cancellationToken,
-            "Не удалось сохранить изменения в запасах. Попробуйте ещё раз");
+        await SaveChangesAsync(cancellationToken);
         return MapToDto(inventoryItem);
     }
 
@@ -152,9 +149,7 @@ public sealed class ProductService(
         }
 
         dbContext.InventoryItems.Remove(inventoryItem);
-        await SaveChangesAsync(
-            cancellationToken,
-            "Не удалось сохранить изменения в запасах. Попробуйте ещё раз");
+        await SaveChangesAsync(cancellationToken);
     }
 
     private async Task<Product> FindOrCreateProductAsync(
@@ -165,6 +160,12 @@ public sealed class ProductService(
         var existingProduct = await dbContext.Products
             .SingleOrDefaultAsync(
                 product => product.NormalizedName == normalizedProductName.NormalizedName,
+                cancellationToken);
+
+        existingProduct ??= await dbContext.Products
+            .SingleOrDefaultAsync(
+                product => product.Aliases
+                    .Any(alias => alias.NormalizedAlias == normalizedProductName.NormalizedName),
                 cancellationToken);
 
         if (existingProduct is not null)
@@ -238,7 +239,7 @@ public sealed class ProductService(
 
     private async Task SaveChangesAsync(
         CancellationToken cancellationToken,
-        string failureMessage)
+        string failureMessage = InventorySaveErrorMessage)
     {
         try
         {

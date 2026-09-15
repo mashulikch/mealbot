@@ -10,6 +10,8 @@ public sealed class MealBotDbContext(DbContextOptions<MealBotDbContext> options)
 
     public DbSet<Product> Products => Set<Product>();
 
+    public DbSet<ProductAlias> ProductAliases => Set<ProductAlias>();
+
     public DbSet<InventoryItem> InventoryItems => Set<InventoryItem>();
 
     public DbSet<MealPlan> MealPlans => Set<MealPlan>();
@@ -20,6 +22,7 @@ public sealed class MealBotDbContext(DbContextOptions<MealBotDbContext> options)
     {
         ConfigureUser(modelBuilder.Entity<User>());
         ConfigureProduct(modelBuilder.Entity<Product>());
+        ConfigureProductAlias(modelBuilder.Entity<ProductAlias>());
         ConfigureInventoryItem(modelBuilder.Entity<InventoryItem>());
         ConfigureMealPlan(modelBuilder.Entity<MealPlan>());
         ConfigurePlannedMeal(modelBuilder.Entity<PlannedMeal>());
@@ -45,6 +48,20 @@ public sealed class MealBotDbContext(DbContextOptions<MealBotDbContext> options)
         entity.Property(product => product.NormalizedName).HasMaxLength(100).IsRequired();
         entity.HasIndex(product => product.NormalizedName).IsUnique();
         entity.Property(product => product.CreatedAtUtc).IsRequired();
+    }
+
+    private static void ConfigureProductAlias(EntityTypeBuilder<ProductAlias> entity)
+    {
+        entity.ToTable("ProductAliases");
+        entity.HasKey(alias => alias.Id);
+        entity.Property(alias => alias.Alias).HasMaxLength(100).IsRequired();
+        entity.Property(alias => alias.NormalizedAlias).HasMaxLength(100).IsRequired();
+        entity.Property(alias => alias.CreatedAtUtc).IsRequired();
+        entity.HasIndex(alias => alias.NormalizedAlias).IsUnique();
+        entity.HasOne(alias => alias.Product)
+            .WithMany(product => product.Aliases)
+            .HasForeignKey(alias => alias.ProductId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 
     private static void ConfigureInventoryItem(EntityTypeBuilder<InventoryItem> entity)

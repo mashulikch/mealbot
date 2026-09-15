@@ -122,7 +122,7 @@ public sealed partial class TelegramBotHostedService
                 return;
 
             case MainMenuKeyboard.AddProductText:
-                _menuDialogs.TryRemove(telegramUserId, out _);
+                ResetDialogStates(telegramUserId);
                 StartAddProductDialog(telegramUserId);
                 await SendMessageAsync(
                     telegramClient,
@@ -132,7 +132,7 @@ public sealed partial class TelegramBotHostedService
                 return;
 
             case MainMenuKeyboard.CreateMenuText:
-                _productDialogs.TryRemove(telegramUserId, out _);
+                ResetDialogStates(telegramUserId);
                 StartMenuPlanningDialog(telegramUserId);
                 await SendMessageAsync(
                     telegramClient,

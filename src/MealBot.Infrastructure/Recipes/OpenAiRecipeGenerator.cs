@@ -1,12 +1,9 @@
-using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FluentValidation;
 using MealBot.Application.Recipes;
-using MealBot.Domain;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -20,9 +17,9 @@ public sealed class OpenAiRecipeGenerator(
 {
     private const string ChatCompletionsEndpoint = "chat/completions";
     private const int ErrorDetailsMaxLength = 800;
+    private const double CreativityTemperature = 0.8;
 
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
-    private static readonly JsonElement RecipeSchema = CreateRecipeSchema();
 
     public async Task<GeneratedRecipeDto> GenerateAsync(
         RecipeGenerationRequest request,
@@ -33,10 +30,7 @@ public sealed class OpenAiRecipeGenerator(
 
         var generatorOptions = GetValidatedOptions();
 
-        return await GenerateWithRetriesAsync(
-            request,
-            generatorOptions,
-            cancellationToken);
+        return await GenerateWithRetriesAsync(request, generatorOptions, cancellationToken);
     }
 
     private RecipeGeneratorOptions GetValidatedOptions()
@@ -90,9 +84,7 @@ public sealed class OpenAiRecipeGenerator(
 
                 if (generatorOptions.RetryDelayMilliseconds > 0)
                 {
-                    await Task.Delay(
-                        generatorOptions.RetryDelayMilliseconds,
-                        cancellationToken);
+                    await Task.Delay(generatorOptions.RetryDelayMilliseconds, cancellationToken);
                 }
             }
             catch (RecipeGenerationException exception)
@@ -118,13 +110,13 @@ public sealed class OpenAiRecipeGenerator(
         var payload = new ChatCompletionRequest(
             generatorOptions.Model,
             [
-                new ChatMessage("system", BuildSystemPrompt()),
-                new ChatMessage("user", BuildUserPrompt(request))
+                new ChatMessage("system", RecipePromptBuilder.BuildSystemPrompt()),
+                new ChatMessage("user", RecipePromptBuilder.BuildUserPrompt(request))
             ],
-            Temperature: 0.8,
+            Temperature: CreativityTemperature,
             ResponseFormat: new StructuredResponseFormat(
                 "json_schema",
-                new JsonSchemaFormat("meal_recipe", Strict: true, RecipeSchema)));
+                new JsonSchemaFormat("meal_recipe", Strict: true, RecipeSchemaProvider.Schema)));
 
         try
         {
@@ -141,7 +133,7 @@ public sealed class OpenAiRecipeGenerator(
                 throw CreateApiException(response.StatusCode, responseBody);
             }
 
-            return ParseRecipe(responseBody);
+            return RecipeResponseParser.Parse(responseBody, JsonOptions, logger);
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
@@ -171,220 +163,24 @@ public sealed class OpenAiRecipeGenerator(
             ? $"Сервис генерации рецептов вернул ошибку {statusDescription}"
             : $"Сервис генерации рецептов вернул ошибку {statusDescription}: {details}";
 
-        var isRetryable = statusCode == HttpStatusCode.TooManyRequests
-                          || (int)statusCode >= 500;
+        var isRetryable = statusCode == HttpStatusCode.TooManyRequests || (int)statusCode >= 500;
 
-        return new RecipeGenerationException(
-            RecipeGenerationErrorKind.Api,
-            message,
-            isRetryable);
-    }
-
-    private static GeneratedRecipeDto ParseRecipe(string responseBody)
-    {
-        try
-        {
-            var completion = JsonSerializer.Deserialize<ChatCompletionResponse>(
-                responseBody,
-                JsonOptions);
-
-            var content = completion?.Choices?.FirstOrDefault()?.Message?.Content;
-            if (string.IsNullOrWhiteSpace(content))
-            {
-                throw new JsonException("В ответе отсутствует message.content");
-            }
-
-            var recipeJson = ExtractJson(content);
-            var recipe = JsonSerializer.Deserialize<GeneratedRecipeDto>(recipeJson, JsonOptions);
-
-            if (recipe is null)
-            {
-                throw new JsonException("Ответ не содержит объект рецепта");
-            }
-
-            EnsureRecipeStructure(recipe);
-            return recipe;
-        }
-        catch (Exception exception) when (exception is JsonException or NotSupportedException)
-        {
-            throw new RecipeGenerationException(
-                RecipeGenerationErrorKind.InvalidResponse,
-                $"Сервис вернул некорректный JSON рецепта: {exception.Message}",
-                isRetryable: true,
-                exception);
-        }
-    }
-
-    private static void EnsureRecipeStructure(GeneratedRecipeDto recipe)
-    {
-        if (string.IsNullOrWhiteSpace(recipe.Name))
-        {
-            throw new JsonException("У рецепта отсутствует название");
-        }
-
-        if (!Enum.IsDefined(recipe.MealType))
-        {
-            throw new JsonException("У рецепта указан неизвестный приём пищи");
-        }
-
-        if (recipe.Servings <= 0)
-        {
-            throw new JsonException("Количество порций должно быть больше нуля");
-        }
-
-        if (recipe.CookingTimeMinutes <= 0)
-        {
-            throw new JsonException("Время приготовления должно быть больше нуля");
-        }
-
-        if (recipe.Ingredients is null || recipe.Ingredients.Count == 0)
-        {
-            throw new JsonException("В рецепте должен быть хотя бы один ингредиент");
-        }
-
-        foreach (var ingredient in recipe.Ingredients)
-        {
-            if (ingredient is null
-                || string.IsNullOrWhiteSpace(ingredient.ProductName)
-                || ingredient.Quantity <= 0
-                || !Enum.IsDefined(ingredient.Unit))
-            {
-                throw new JsonException("В рецепте указан некорректный ингредиент");
-            }
-        }
-
-        if (recipe.Steps is null
-            || recipe.Steps.Count == 0
-            || recipe.Steps.Any(string.IsNullOrWhiteSpace))
-        {
-            throw new JsonException("В рецепте должна быть хотя бы одна инструкция");
-        }
-    }
-
-    private static string ExtractJson(string content)
-    {
-        var normalized = content.Trim();
-        if (normalized.StartsWith("```", StringComparison.Ordinal))
-        {
-            var firstLineEnd = normalized.IndexOf('\n');
-            var lastFence = normalized.LastIndexOf("```", StringComparison.Ordinal);
-
-            if (firstLineEnd > 0 && lastFence > firstLineEnd)
-            {
-                return normalized[(firstLineEnd + 1)..lastFence].Trim();
-            }
-        }
-
-        return normalized;
-    }
-
-    private static string BuildSystemPrompt() =>
-        "Ты — генератор рецептов для Telegram-бота планирования меню. " +
-        "Всегда возвращай только JSON по переданной JSON Schema, без Markdown и пояснений. " +
-        "Используй названия продуктов и единицы измерения ровно в том виде, в котором они переданы. " +
-        "Не выдумывай продукты, если разрешение на недостающие ингредиенты не включено. " +
-        "Не повторяй блюда из списка исключений";
-
-    private static string BuildUserPrompt(RecipeGenerationRequest request)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine($"Приём пищи: {request.MealType}");
-        builder.AppendLine($"Порций: {request.Servings}");
-        builder.AppendLine($"Максимальное время приготовления: {request.MaxCookingTimeMinutes} минут");
-        builder.AppendLine(
-            $"Можно использовать недостающие ингредиенты: {(request.AllowMissingIngredients ? "да" : "нет")}");
-
-        builder.AppendLine("Доступные продукты с точными остатками:");
-        foreach (var product in request.AvailableProducts)
-        {
-            builder.AppendLine(
-                $"— {product.Name}: {product.Quantity.ToString(CultureInfo.InvariantCulture)} {product.Unit}");
-        }
-
-        builder.AppendLine("Блюда, которые нельзя повторять:");
-        if (request.ExcludedRecipeNames.Count == 0)
-        {
-            builder.AppendLine("— нет");
-        }
-        else
-        {
-            foreach (var recipeName in request.ExcludedRecipeNames)
-            {
-                builder.AppendLine($"— {recipeName}");
-            }
-        }
-
-        if (request.PreviousErrors is { Count: > 0 })
-        {
-            builder.AppendLine("Ошибки предыдущих попыток, которые нужно исправить:");
-            foreach (var error in request.PreviousErrors)
-            {
-                builder.AppendLine($"— {error}");
-            }
-        }
-
-        builder.AppendLine();
-        builder.AppendLine(
-            "Сгенерируй одно блюдо. Количество ингредиентов должно быть положительным. " +
-            "Если недостающие ингредиенты запрещены, используй только переданные продукты " +
-            "и не превышай их доступные остатки");
-
-        return builder.ToString();
-    }
-
-    private static JsonSerializerOptions CreateJsonOptions()
-    {
-        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
-        {
-            PropertyNameCaseInsensitive = true,
-            NumberHandling = JsonNumberHandling.AllowReadingFromString
-        };
-        options.Converters.Add(new JsonStringEnumConverter());
-        return options;
-    }
-
-    private static JsonElement CreateRecipeSchema()
-    {
-        using var document = JsonDocument.Parse(
-            """
-            {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["name", "mealType", "servings", "cookingTimeMinutes", "ingredients", "steps"],
-              "properties": {
-                "name": { "type": "string" },
-                "mealType": { "type": "string", "enum": ["Breakfast", "Lunch", "Dinner"] },
-                "servings": { "type": "integer", "minimum": 1 },
-                "cookingTimeMinutes": { "type": "integer", "minimum": 1 },
-                "ingredients": {
-                  "type": "array",
-                  "minItems": 1,
-                  "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["productName", "quantity", "unit", "isOptional"],
-                    "properties": {
-                      "productName": { "type": "string" },
-                      "quantity": { "type": "number", "exclusiveMinimum": 0 },
-                      "unit": { "type": "string", "enum": ["Gram", "Milliliter", "Piece"] },
-                      "isOptional": { "type": "boolean" }
-                    }
-                  }
-                },
-                "steps": {
-                  "type": "array",
-                  "minItems": 1,
-                  "items": { "type": "string" }
-                }
-              }
-            }
-            """);
-
-        return document.RootElement.Clone();
+        return new RecipeGenerationException(RecipeGenerationErrorKind.Api, message, isRetryable);
     }
 
     private static string Truncate(string value, int maxLength) =>
         value.Length <= maxLength ? value : value[..maxLength] + "…";
+
+    private static JsonSerializerOptions CreateJsonOptions()
+    {
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            PropertyNameCaseInsensitive = true,
+            NumberHandling = JsonNumberHandling.AllowReadingFromString
+        };
+        jsonOptions.Converters.Add(new JsonStringEnumConverter());
+        return jsonOptions;
+    }
 
     private sealed record ChatCompletionRequest(
         string Model,
@@ -405,11 +201,4 @@ public sealed class OpenAiRecipeGenerator(
         bool Strict,
         [property: JsonPropertyName("schema")]
         JsonElement Schema);
-
-    private sealed record ChatCompletionResponse(
-        IReadOnlyList<ChatChoice>? Choices);
-
-    private sealed record ChatChoice(ChatMessageResponse? Message);
-
-    private sealed record ChatMessageResponse(string? Content);
 }
